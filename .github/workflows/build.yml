@@ -218,7 +218,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository_owner }}/zhenguojian
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -255,7 +255,7 @@ jobs:
           grep -q '"ok":true' health.json
           grep -q '"allSources":true' health.json
           curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/sources | grep -q '"dsd"'
-          curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/info | grep -q '"真果鉴"'
+          curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/info | grep -q '"page":"/"'
           curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/settings | grep -q '"proxyMode":"direct"'
           curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/downloads | grep -q '"jobs"'
           curl -fsS http://127.0.0.1:18080/ > page.html
