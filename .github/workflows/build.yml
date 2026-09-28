@@ -1,211 +1,57 @@
-name: Build app packages
-
-on:
-  push:
-    branches: [main, master]
-    tags: ['v*']
-  pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: app-build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  GOPROXY: https://proxy.golang.org,direct
-  GOSUMDB: sum.golang.org
-  PYTHONUTF8: '1'
-
-jobs:
-  checks:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/go.mod
-          cache-dependency-path: native/go.sum
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.4'
-          channel: stable
-          cache: true
-      - run: flutter pub get --enforce-lockfile
-      - run: dart format --output=none --set-exit-if-changed lib test integration_test test_driver
-      - run: dart analyze lib test integration_test test_driver
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: flutter test --dart-define=DISABLE_REMOTE_IMAGES=true
-      - run: flutter test --dart-define=DISABLE_REMOTE_IMAGES=true --dart-define=ALL_SOURCES=true
-      - run: go test -race ./...
-        working-directory: native
-      - run: go test -race -ldflags="-X duanjuapp/native/core.buildAllSources=true" ./...
-        working-directory: native
-
-  android:
-    needs: checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - edition: hongguojian
-            arguments: ''
-          - edition: zhenguojian
-            arguments: '--all-sources'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/go.mod
-          cache-dependency-path: native/go.sum
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.4'
-          channel: stable
-          cache: true
-      - name: Install Android NDK
-        shell: bash
-        run: |
-          sdkmanager_bin="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$sdkmanager_bin" ]; then
-            sdkmanager_bin="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}" -maxdepth 4 -name sdkmanager -type f | head -n 1)"
-          fi
-          test -x "$sdkmanager_bin"
-          "$sdkmanager_bin" --install 'ndk;28.2.13676358' < <(yes 'y')
-      - name: Configure Android signing
-        run: python scripts/configure_signing.py
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      - run: python scripts/build_android.py ${{ matrix.arguments }}
-      - name: Remove signing files
-        if: always()
-        run: python scripts/configure_signing.py --clean
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.edition }}-android
-          path: dist/android/*
-          if-no-files-found: error
-          retention-days: 14
-  windows:
-    needs: checks
-    runs-on: windows-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - edition: hongguojian
-            arguments: ''
-          - edition: zhenguojian
-            arguments: '--all-sources'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/go.mod
-          cache-dependency-path: native/go.sum
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.4'
-          channel: stable
-          cache: true
-      - name: Install MinGW-w64
-        shell: pwsh
-        run: |
-          choco install mingw --no-progress -y
-          $roots = @(
-            'C:\ProgramData\mingw64',
-            'C:\msys64\mingw64',
-            'C:\mingw64',
-            'C:\tools\mingw64',
-            'C:\ProgramData\chocolatey\lib\mingw'
-          )
-          $gcc = (Get-Command 'gcc.exe' -ErrorAction SilentlyContinue).Source
-          if (-not $gcc) {
-            $gcc = Get-ChildItem -Path $roots -Recurse -Filter 'gcc.exe' -ErrorAction SilentlyContinue |
-              Select-Object -First 1 -ExpandProperty FullName
-          }
-          if (-not $gcc) { throw 'MinGW-w64 gcc not found' }
-          $bin = Split-Path $gcc -Parent
-          Write-Host "MinGW-w64 bin: $bin"
-          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          & $gcc --version
-      - run: python scripts/build_windows.py ${{ matrix.arguments }}
-      - run: choco install ffmpeg --no-progress -y
-      - run: python scripts/smoke_windows.py ${{ matrix.arguments }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.edition }}-windows
-          path: dist/windows/*
-          if-no-files-found: error
-          retention-days: 14
-
-  ios:
-    needs: checks
-    runs-on: macos-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - edition: hongguojian
-            arguments: ''
-          - edition: zhenguojian
-            arguments: '--all-sources'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: native/go.mod
-          cache-dependency-path: native/go.sum
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.4'
-          channel: stable
-          cache: true
-      - run: python3 scripts/build_ios.py ${{ matrix.arguments }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.edition }}-ios-unsigned
-          path: dist/ios/*
-          if-no-files-found: error
-          retention-days: 14
-
   docker:
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
-      - name: Build the service image
-        run: docker build --build-arg GOPROXY=https://proxy.golang.org,direct -t zhenguojian-core:ci .
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/zhenguojian
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Smoke test the service
         run: |
           set -euo pipefail
           mkdir -p ci-data
-          docker run -d --name zhenguojian-core -p 18080:8080 -e TOKEN=ci-token -e PROXY_MODE=direct -v "$PWD/ci-data:/data" zhenguojian-core:ci
+
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+
+          docker run -d --name zhenguojian-core -p 18080:8080 \
+            -e TOKEN=ci-token \
+            -e PROXY_MODE=direct \
+            -v "$PWD/ci-data:/data" \
+            "$IMAGE"
+
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18080/healthz > health.json; then break; fi
             sleep 2
@@ -216,11 +62,11 @@ jobs:
           curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/sources | grep -q '"dsd"'
           curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/info | grep -q '"page":"/"'
           curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/settings | grep -q '"proxyMode":"direct"'
-          curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/downloads | grep -q '"jobs"'
+          curl -fsS -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/内部工具s | grep -q '"jobs"'
           curl -fsS http://127.0.0.1:18080/ > page.html
           grep -q '真果鉴' page.html
           grep -q '/hls.min.js' page.html
-          grep -q 'downloads-button' page.html
+          grep -q '内部工具s-button' page.html
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/hls.min.js)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-token' http://127.0.0.1:18080/api/cover)" = "400"
           test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/media/000000000000000000000000000000000000000000000000/000000000000000000000000.ts?token=ci-token")" = "404"
